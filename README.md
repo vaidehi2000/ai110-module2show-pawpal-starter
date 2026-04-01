@@ -43,6 +43,31 @@ Tasks can be marked `recurrence="daily"` or `recurrence="weekly"`. When you call
 
 ---
 
+## Testing PawPal+
+
+### Run the test suite
+
+```bash
+python -m pytest tests/test_pawpal.py -v
+```
+
+### What the tests cover
+
+| Area | Tests | What is verified |
+|---|---|---|
+| **Sorting** | 2 | Tasks are returned in morning → afternoon → evening → unspecified order; the original list is never mutated |
+| **Recurrence** | 3 | Completing a daily task auto-creates a follow-up due the next day; non-recurring tasks return `None`; month-boundary dates (e.g. Jan 31 → Feb 1) are handled correctly |
+| **Conflict detection** | 3 | Overlapping wall-clock windows are flagged; back-to-back tasks are not; slot-budget overflows are checked per-pet, not across pets |
+| **Core behavior** | 2 | `mark_complete()` flips status; adding a task grows the pet's task list |
+
+### Confidence Level
+
+**4 / 5 stars**
+
+The scheduling logic (greedy budget pass, `timedelta` recurrence, overlap arithmetic) is well-exercised and all 10 tests pass cleanly. One star is held back because the test suite does not yet cover the full `generate_plan` budget-exhaustion path, cross-pet time-overlap warnings, or the Streamlit UI layer — so integration-level confidence remains untested.
+
+---
+
 ## Getting started
 
 ### Setup
