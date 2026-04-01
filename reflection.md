@@ -81,13 +81,27 @@ classDiagram
 
 **d. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+The initial design uses four classes: `Pet`, `Task`, `Owner`, and `Scheduler`.
+
+`Pet` is a pure data container. Its responsibility is to represent the animal being cared for and expose whether it has any needs (like medication) that should influence scheduling. It holds no scheduling logic itself.
+
+`Task` represents a single unit of care work. Its responsibility is to carry all the metadata the scheduler needs to make decisions — how long the task takes, how important it is, and when it ideally happens. It also tracks its own completion state via `mark_complete()`, keeping that concern local to the task rather than spread across the system.
+
+`Owner` acts as the entry point and context provider. Its responsibility is to hold the human side of the equation: how much time is available today and any soft preferences (e.g. preferring walks in the morning). It also owns the list of pets, making it the natural root object for the whole session.
+
+`Scheduler` is the only class with real logic. Its responsibility is to take the owner's constraints and a list of candidate tasks and produce an ordered, explainable daily plan. It is kept separate from `Owner` deliberately — the owner describes the situation, while the scheduler decides what to do about it. This separation makes the scheduling logic easier to test and swap out independently.
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+Yes, the design changed in four ways after reviewing the initial skeleton:
+
+1. **Added `pet_name` to `Task`.** The original `Task` had no reference to which pet it belonged to. Without this, a multi-pet household would produce a flat task list with no way to distinguish "walk Mochi" from "walk Biscuit". Adding `pet_name: str` as a field gives the scheduler (and the UI) the context it needs to group or label tasks correctly.
+
+2. **Added `PRIORITY_ORDER` constant and `numeric_priority` property to `Task`.** The original design stored priority as a plain string (`"low"`, `"medium"`, `"high"`). Sorting by that string alphabetically produces the order `high → low → medium`, which is wrong. A module-level dict maps each label to an integer (1/2/3), and a `numeric_priority` property on `Task` exposes this so `generate_plan()` can sort correctly without duplicating the mapping logic.
+
+3. **Added `self.explanations` to `Scheduler`.** The original design had `generate_plan()` return a task list and `explain_plan()` return a string, but provided no way for the two methods to share reasoning. The scheduling decisions (why a task was included or skipped) are made inside `generate_plan()`, so that method now populates `self.explanations` as a side effect. `explain_plan()` simply reads from it, keeping the logic in one place.
+
+4. **Documented that `generate_plan()` must use a local `remaining_minutes` counter.** The time budget lives on `owner.available_minutes`. If `generate_plan()` decremented that value directly, it would permanently reduce the owner's stated availability — a side effect that would break any second call. A local copy used only inside the method avoids mutating the owner's state.
 
 ---
 
