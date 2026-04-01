@@ -61,7 +61,8 @@ with st.form("pet_form"):
 if owner.pets:
     st.markdown("**Current pets:**")
     for pet in owner.pets:
-        st.markdown(f"- {pet.get_profile()}")
+        needs_note = " — requires medication" if pet.requires_medication() else ""
+        st.markdown(f"- {pet.get_profile()}{needs_note}")
 else:
     st.info("No pets added yet.")
 
@@ -70,23 +71,27 @@ else:
 # ===========================================================================
 st.header("3. Add a Task")
 
+PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+
 if not owner.pets:
     st.warning("Add at least one pet before adding tasks.")
 else:
     with st.form("task_form"):
         col1, col2 = st.columns(2)
         with col1:
-            task_title = st.text_input("Task title", value="Morning walk")
-            category   = st.selectbox("Category", ["walk", "feed", "medication", "grooming", "enrichment"])
-            target_pet = st.selectbox("For which pet?", [p.name for p in owner.pets])
+            task_title     = st.text_input("Task title", value="Morning walk")
+            category       = st.selectbox("Category", ["walk", "feed", "medication", "grooming", "enrichment"])
+            target_pet     = st.selectbox("For which pet?", [p.name for p in owner.pets])
+            start_time_raw = st.text_input("Start time (HH:MM, optional)", placeholder="e.g. 08:00")
         with col2:
-            duration      = st.number_input("Duration (minutes)", min_value=1, max_value=240, value=20)
-            priority      = st.selectbox("Priority", ["low", "medium", "high"], index=2)
-            preferred_time = st.selectbox("Preferred time (optional)", ["(none)", "morning", "afternoon", "evening"])
+            duration         = st.number_input("Duration (minutes)", min_value=1, max_value=240, value=20)
+            priority         = st.selectbox("Priority", ["low", "medium", "high"], index=2)
+            preferred_time   = st.selectbox("Preferred time slot (optional)", ["(none)", "morning", "afternoon", "evening"])
             recurrence_input = st.selectbox("Recurrence", ["(none)", "daily", "weekly"])
 
         add_task = st.form_submit_button("Add task")
         if add_task:
+            start_time_val = start_time_raw.strip() if start_time_raw.strip() else None
             new_task = Task(
                 title=task_title,
                 category=category,
@@ -95,15 +100,16 @@ else:
                 pet_name=target_pet,
                 preferred_time=None if preferred_time == "(none)" else preferred_time,
                 recurrence=None if recurrence_input == "(none)" else recurrence_input,
+                start_time=start_time_val,
             )
             scheduler.add_task(new_task)
             st.success(f"Added '{task_title}' ({priority} priority, {duration} min) for {target_pet}.")
 
-    # Show tasks with filter controls
+    # ---- Filter controls using scheduler.filter_tasks() -------------------
     all_tasks_flat = [t for pet in owner.pets for t in pet.tasks]
     if all_tasks_flat:
         st.markdown("**Current tasks:**")
-        fcol1, fcol2 = st.columns(2)
+        fcol1, fcol2, fcol3 = st.columns(3)
         with fcol1:
             filter_pet = st.selectbox(
                 "Filter by pet", ["All"] + [p.name for p in owner.pets], key="filter_pet"
@@ -112,17 +118,37 @@ else:
             filter_status = st.selectbox(
                 "Filter by status", ["All", "Pending", "Completed"], key="filter_status"
             )
+        with fcol3:
+            sort_mode = st.selectbox(
+                "Sort by", ["Time slot", "Priority"], key="sort_mode"
+            )
 
-        filtered = all_tasks_flat
-        if filter_pet != "All":
-            filtered = [t for t in filtered if t.pet_name == filter_pet]
-        if filter_status == "Pending":
-            filtered = [t for t in filtered if not t.is_completed]
-        elif filter_status == "Completed":
-            filtered = [t for t in filtered if t.is_completed]
+        # Use Scheduler.filter_tasks() instead of manual list comprehensions
+        pet_arg    = None if filter_pet == "All" else filter_pet
+        status_arg = None if filter_status == "All" else (filter_status == "Completed")
+        filtered = scheduler.filter_tasks(pet_name=pet_arg, completed=status_arg)
+
+        # Use Scheduler.sort_by_time() when the user selects time-slot ordering
+        if sort_mode == "Time slot":
+            filtered = scheduler.sort_by_time(filtered)
+        else:
+            filtered = sorted(filtered, key=lambda t: -t.numeric_priority)
 
         if filtered:
-            st.table([t.to_dict() for t in filtered])
+            rows = []
+            for t in filtered:
+                rows.append({
+                    "Pet":        t.pet_name,
+                    "Task":       t.title,
+                    "Category":   t.category,
+                    "Priority":   f"{PRIORITY_EMOJI.get(t.priority, '')} {t.priority}",
+                    "Duration":   f"{t.duration_minutes} min",
+                    "Time slot":  t.preferred_time or "—",
+                    "Start time": t.start_time or "—",
+                    "Recurs":     t.recurrence or "—",
+                    "Done":       "✓" if t.is_completed else "",
+                })
+            st.table(rows)
         else:
             st.info("No tasks match the current filters.")
 
@@ -142,21 +168,45 @@ if st.button("Generate schedule", type="primary"):
             st.warning("No tasks could be scheduled — check that tasks have been added and the time budget is large enough.")
         else:
             total = sum(t.duration_minutes for t in plan)
-            st.success(f"Scheduled {len(plan)} task(s) using {total} of {owner.available_minutes} minutes.")
+            st.success(f"Scheduled {len(plan)} task(s) · {total} of {owner.available_minutes} min used · {owner.available_minutes - total} min remaining.")
 
+            # Display plan as a clean table (plan is already sorted by time slot
+            # inside generate_plan, so the order shown here matches the schedule)
+            plan_rows = []
             for i, task in enumerate(plan, start=1):
-                time_label = f" · {task.preferred_time}" if task.preferred_time else ""
-                recurrence_badge = f" · repeats {task.recurrence}" if task.recurrence else ""
-                st.markdown(f"**{i}. [{task.pet_name}] {task.title}**{time_label}{recurrence_badge}")
-                st.caption(f"Category: {task.category} · Priority: {task.priority} · Duration: {task.duration_minutes} min")
+                plan_rows.append({
+                    "#":          i,
+                    "Pet":        task.pet_name,
+                    "Task":       task.title,
+                    "Category":   task.category,
+                    "Priority":   f"{PRIORITY_EMOJI.get(task.priority, '')} {task.priority}",
+                    "Time slot":  task.preferred_time or "—",
+                    "Start":      task.start_time or "—",
+                    "Duration":   f"{task.duration_minutes} min",
+                    "Recurs":     task.recurrence or "—",
+                })
+            st.table(plan_rows)
 
-            conflicts = scheduler.detect_conflicts()
-            if conflicts:
+            # ---- Conflict warnings ----------------------------------------
+            slot_conflicts = scheduler.detect_conflicts()
+            time_conflicts = scheduler.detect_time_conflicts()
+
+            if not slot_conflicts and not time_conflicts:
+                st.success("No scheduling conflicts detected.")
+            else:
                 st.divider()
-                st.warning("**Scheduling conflicts detected:**")
-                for msg in conflicts:
-                    st.markdown(f"- {msg}")
+
+                if time_conflicts:
+                    st.error("**Time overlap conflicts** — two tasks are scheduled at the same time. Reschedule one before running this plan.")
+                    for msg in time_conflicts:
+                        # Pull out the key details for a pet-owner-friendly message
+                        st.warning(f"⏰ {msg}")
+
+                if slot_conflicts:
+                    st.warning("**Slot budget warnings** — a pet has more than 4 hours of tasks in one time slot. Consider spreading tasks across slots.")
+                    for msg in slot_conflicts:
+                        st.info(f"📋 {msg}")
 
             st.divider()
-            with st.expander("Scheduler reasoning"):
+            with st.expander("Why did the scheduler choose these tasks?"):
                 st.text(scheduler.explain_plan())

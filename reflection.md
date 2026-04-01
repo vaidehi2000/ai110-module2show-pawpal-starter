@@ -109,8 +109,15 @@ Yes, the design changed in four ways after reviewing the initial skeleton:
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+The scheduler considers three constraints:
+
+1. **Time budget** — the owner's `available_minutes` acts as a hard cap. A task is only included if its `duration_minutes` fits within what remains. This is the strictest constraint because no amount of priority can make a 60-minute task fit in 10 remaining minutes.
+
+2. **Priority** — tasks are ranked using a `PRIORITY_ORDER` integer map (`low=1`, `medium=2`, `high=3`) so the greedy pass always fills the budget with the most important tasks first. Priority was chosen as the primary sort key because the owner explicitly assigns it — it directly encodes their intent.
+
+3. **Duration as a tiebreaker** — when two tasks share the same priority, shorter tasks are scheduled first. This maximizes the number of tasks that fit within the budget, which is a better outcome than scheduling one long high-priority task and running out of time before shorter ones of equal priority.
+
+Preferred time slot and start time are soft constraints used for display and conflict detection, not for inclusion/exclusion decisions. This was a deliberate choice: a task's urgency shouldn't change just because it has no preferred time assigned.
 
 **b. Tradeoffs**
 
@@ -133,13 +140,23 @@ A future improvement would be to assign default minute-ranges to each slot (morn
 
 **a. How you used AI**
 
-- How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
-- What kinds of prompts or questions were most helpful?
+I used Claude Code (via the VS Code extension) across every phase of the project, but the way I used it changed depending on the task:
+
+- **Design phase** — I used it to audit my initial UML against the final code. The most effective prompt style was asking Claude to compare a specific artifact (the Mermaid diagram in `reflection.md`) against a specific file (`pawpal_system.py`) and list exact discrepancies. This produced a precise diff table rather than vague suggestions.
+
+- **Testing phase** — I asked Claude to identify the most important edge cases given the specific algorithms in the codebase (greedy scheduling, `timedelta` recurrence, overlap arithmetic). Prompting with the actual method names and the conditions they use (e.g. `a_start < b_end AND b_start < a_end`) led to tests that targeted real failure modes rather than generic "it should work" checks.
+
+- **UI phase** — I asked Claude to identify which Scheduler methods were not being used in `app.py` and to replace the manual workarounds with the proper method calls. Having Claude read both files before suggesting changes meant every edit was grounded in the actual code.
+
+- **Documentation phase** — I used Claude to rewrite the README from assignment-voice ("your job is to…") to product-voice ("PawPal+ helps pet owners…"), and to update the Features section to name the actual algorithms rather than describe them vaguely.
+
+The most effective prompt pattern throughout was: *"read this file, compare it to that file, tell me what is missing or wrong."* Open-ended prompts like "improve the app" produced suggestions that were too broad. Specific, comparative prompts produced actionable, scoped output.
 
 **b. Judgment and verification**
 
-- Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+One clear example: when Claude generated the initial `detect_time_conflicts()` description for the README Features section, it wrote "flags overlapping tasks" — which is accurate but says nothing about *how*. I pushed back and asked it to name the exact overlap condition (`A.start < B.end AND B.start < A.end`) and explain that it catches all four overlap shapes. The original phrasing would have been fine for a casual README, but since the Features section is meant to describe the algorithms I implemented, the precise condition is the important part.
+
+More broadly, I verified every AI suggestion against the source code before accepting it. When Claude said "the Scheduler stores tasks directly," I checked `pawpal_system.py` and found that tasks live on `Pet`, not `Scheduler` — so that description was wrong and I corrected it. The rule I developed: treat AI output as a first draft written by someone who has read the code once, not as ground truth.
 
 ---
 
@@ -147,13 +164,19 @@ A future improvement would be to assign default minute-ranges to each slot (morn
 
 **a. What you tested**
 
-- What behaviors did you test?
-- Why were these tests important?
+The test suite covers four areas across 10 tests:
+
+1. **Sorting correctness** — `sort_by_time()` returns tasks in morning → afternoon → evening → unspecified order, and the original list is not mutated. These matter because a silent sort bug (like alphabetical fallback) would produce a wrong order without raising an error.
+
+2. **Recurrence logic** — completing a daily task creates a follow-up with the correct due date, non-recurring tasks return `None`, and a task due on Jan 31 advances to Feb 1 (not a crash or Jan 32). The month-boundary test specifically targets the `timedelta` calculation — if someone had used `due_date.day + 1` manually, this test would catch it.
+
+3. **Conflict detection** — overlapping wall-clock windows are flagged, back-to-back tasks are not, and slot-budget overflows are checked per-pet (not summed across pets). The back-to-back test guards the boundary condition in `a_start < b_end AND b_start < a_end`, which is easy to get wrong.
+
+4. **Core behavior** — `mark_complete()` flips `is_completed`, and `add_task()` grows the pet's task list. These are the foundation everything else depends on.
 
 **b. Confidence**
 
-- How confident are you that your scheduler works correctly?
-- What edge cases would you test next if you had more time?
+**4 / 5.** The core scheduling algorithms — priority sorting, `timedelta` recurrence, overlap detection — are exercised with targeted tests including edge cases, and all 10 pass. Confidence is not 5/5 because the `generate_plan()` budget-exhaustion boundary (`<=` vs `<`) is not directly tested, cross-pet time-overlap warnings have no test, and the Streamlit UI has no automated coverage. If I had more time, I would add: a test where a task fits exactly at the budget boundary (30 min left, 30-min task — must be included), a test where a high-priority task is picked over two lower-priority tasks that together would fill the budget more efficiently, and a test confirming `complete_task()` on a recurring task adds the follow-up to the right pet when there are multiple pets.
 
 ---
 
@@ -161,12 +184,12 @@ A future improvement would be to assign default minute-ranges to each slot (morn
 
 **a. What went well**
 
-- What part of this project are you most satisfied with?
+The part I'm most satisfied with is the conflict detection architecture. Having two separate methods — `detect_conflicts()` for slot budget overflows and `detect_time_conflicts()` for exact wall-clock overlaps — and surfacing them as different severity levels in the UI (red for overlap, yellow for budget) reflects a real design decision: not all warnings are equal. An overlap means two things literally cannot happen simultaneously; a budget overflow means a slot is heavy but still runnable. Getting that distinction right in both the backend logic and the Streamlit display felt like the most complete piece of the system.
 
 **b. What you would improve**
 
-- If you had another iteration, what would you improve or redesign?
+The greedy scheduler is easy to understand but has a real weakness: it cannot "pack" the budget optimally. If the owner has 50 minutes left and there's one 55-minute medium task and two 25-minute low tasks, the scheduler skips the medium task and fits the two low-priority ones — which may not be what the owner wants. A future version would consider a simple knapsack approach for the final few tasks when the greedy pass leaves significant time unused. I would also add a `due_date` filter to `generate_plan()` so that tasks with a future due date aren't scheduled today even if they are technically pending.
 
 **c. Key takeaway**
 
-- What is one important thing you learned about designing systems or working with AI on this project?
+The most important thing I learned is that AI is most useful when you give it a specific, bounded question against specific artifacts — not when you ask it to "improve" or "build" something open-ended. The moments where Claude was least helpful were when I asked broad questions; the moments where it was most helpful were when I said "compare these two files and list what is missing." That forced me to stay in the role of lead architect: I had to know what I was looking for, decide which suggestions were right, and push back on the ones that were accurate-but-imprecise. The AI accelerated the work, but every decision about what the system should do and how the pieces should fit together had to come from me first.
