@@ -22,6 +22,27 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## Smarter Scheduling
+
+PawPal+ goes beyond a simple task list with five algorithmic features built into the `Scheduler` class:
+
+### Sort by time slot
+`sort_by_time(tasks)` returns tasks ordered **morning → afternoon → evening → unspecified** using Python's `sorted()` with a lambda key. The original list is never mutated, so it is safe to call on any subset of tasks without side effects. The generated daily plan is also automatically re-sorted by slot after the greedy budget pass.
+
+### Filter by pet or status
+`filter_tasks(pet_name, completed)` lets you slice the full task list by pet name, completion status, or both. Both parameters are optional — pass neither to return everything, or combine them to get (for example) only Mochi's pending tasks.
+
+### Recurring tasks with auto-scheduling
+Tasks can be marked `recurrence="daily"` or `recurrence="weekly"`. When you call `complete_task(task)`, the scheduler marks the task done and automatically creates the next occurrence using `datetime.timedelta` — `+1 day` for daily, `+7 days` for weekly — then registers it under the same pet. No manual re-entry required.
+
+### Slot conflict detection
+`detect_conflicts()` checks the scheduled plan for per-pet, per-slot budget overflows. If a pet's combined task duration in a single slot (morning / afternoon / evening) exceeds 4 hours, a warning is returned — without crashing or blocking the rest of the schedule from displaying.
+
+### Exact time-overlap detection
+`detect_time_conflicts(tasks)` checks every pair of tasks that have an explicit `start_time` set (in `HH:MM` format) for true window overlap using the condition `A.start < B.end AND B.start < A.end`. This catches all four overlap shapes (partial, full containment, identical start) in a single expression and flags both same-pet and cross-pet conflicts with a human-readable warning string.
+
+---
+
 ## Getting started
 
 ### Setup

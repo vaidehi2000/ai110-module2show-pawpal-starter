@@ -114,8 +114,18 @@ Yes, the design changed in four ways after reviewing the initial skeleton:
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+**Tradeoff: `detect_time_conflicts()` only checks tasks that have an explicit `start_time` — tasks without one are silently skipped.**
+
+The scheduler supports two ways to express timing: a loose `preferred_time` slot ("morning", "afternoon", "evening") and a precise `start_time` in HH:MM format. Conflict detection runs only on tasks with `start_time` set, because slot-only tasks have no concrete window to compare against. A task marked "morning" could mean 7 AM or 11 AM — there is no single minute-value to subtract from another.
+
+This means two tasks that both say "morning" will never trigger a conflict warning, even if a pet owner naively adds a 3-hour walk and a 30-minute grooming session to the same slot. The existing `detect_conflicts()` method partially compensates by flagging when the *total duration* in a slot exceeds the slot's 4-hour budget, but that is a softer check — it warns about overload, not about literal simultaneous scheduling.
+
+The tradeoff is reasonable for this stage of the app because:
+1. Most casual pet owners think in approximate slots ("give meds in the morning"), not wall-clock times, so requiring `start_time` everywhere would be a friction increase for little gain.
+2. The slot-budget check (`detect_conflicts`) already catches the most common over-scheduling mistake.
+3. If the owner *does* care about precise scheduling (e.g. medication must be at 8:00 AM, vet visit at 8:30 AM), they can opt into `start_time` and get the full overlap check.
+
+A future improvement would be to assign default minute-ranges to each slot (morning = 06:00–12:00, afternoon = 12:00–18:00, evening = 18:00–22:00) and flag slot-only tasks whose combined duration exceeds their slot window, closing the gap between the two detection methods.
 
 ---
 
